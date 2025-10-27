@@ -16,6 +16,7 @@ expr
     | ('+' | '-' | '!' | '~') expr                        # UnaryExpr
     | expr ('*' | '/' | '%') expr                         # MultiplicativeExpr
     | expr ('+' | '-') expr                               # AdditiveExpr
+    | expr 'instanceof' type                              # InstanceofExpr
     | expr ('==' | '!=' | '<' | '>' | '<=' | '>=') expr   # CompareExpr
     | expr ('||' | '&&') expr                             # LogicalExpr
     | expr '?' expr ':' expr                              # TernaryExpr
@@ -24,19 +25,26 @@ expr
 
 exprList: expr (',' expr)*;
 
-atom: literal | '[' exprList? ']';
-literal: INT | REAL | RANGE | STRING | CHAR | BOOL | NULL;
+atom: literal | '[' exprList? ']' | '{' pairList? '}';
+pair: (ID | STRING) ':' expr;
+pairList: pair (',' pair)*;
+literal: int | real | range | STRING | CHAR | BOOL | NULL;
 
 lval
     : namespacedId ('[' expr ']' | '.' ID)*
     ;
 
 // 词法规则
-REAL: INT | [+-]?[0-9]* '.' [0-9]+ | [+-]?[0-9]+ '.' [0-9]*;
-INT: [+-]?[0-9]+;
-RANGE: REAL? '..' REAL?;
-STRING: '"' (~["\\] | '\\' .)* '"';
-CHAR: '\'' (~['\\] | '\\' .) '\'';
+real: REAL_VALUE REAL_TYPE?;
+REAL_VALUE: [+-]?([0-9]* '.' [0-9]+ | [0-9]+ '.' [0-9]*)([eE] [+-]?[0-9]+)?;
+REAL_TYPE: [FfDd];
+int: (INT_DEC | INT_HEX) INT_TYPE?;
+INT_DEC: [+-]?[0-9]+;
+INT_TYPE: [BbSsIiLlFfDd];
+INT_HEX: '0x' [0-9a-fA-F]+;
+range: (int | real)? '..' (int | real)?;
+STRING: '"' (~["\\] | '\\' .)* '"' | '\'' (~['\\] | '\\' .) '\'';
+CHAR: [Cc]STRING;
 BOOL: 'true' | 'false';
 NULL: 'null';
 
@@ -50,7 +58,7 @@ statement
     | 'switch' '(' expr ')' '{' (case | default)* '}'          # SwitchStmt
     | 'for' '(' (expr | defineStatement)? ';' expr? ';' expr? ')' statement      # ForStmt
     | 'while' '(' expr ')' statement                           # WhileStmt
-    | 'repeat' ID RANGE statement                              # RepeatStmt
+    | 'repeat' ID range statement                              # RepeatStmt
     | 'with' '(' expr ')' statement                            # WithStmt
     | 'break' ';'                                              # BreakStmt
     | 'continue' ';'                                           # ContinueStmt
@@ -65,9 +73,10 @@ defineStatement
     : 'let' namespacedId typeDecl? ('=' expr)?               # LetStmt
     | 'const' namespacedId typeDecl? ('=' expr)?             # ConstStmt
     | 'data' namespacedId typeDecl? ('=' expr)?              # DataStmt
-    | 'score' ('<' REAL '>')? namespacedId ('=' expr)?        # ScoreStmt
+    | 'score' scalingFactor? namespacedId ('=' expr)?       # ScoreStmt
     ;
 
+scalingFactor: '<' (int | real) '>';
 functionStatement: decorator? 'async'? 'function' namespacedId '(' params? ')' typeDecl? statement?;
 classStatement: decorator? 'class' namespacedId ('extends' namespacedId)? ('implements' namespacedId (',' namespacedId)*)? ('{' (defineStatement | classStatement | functionStatement)* '}')?;
 interfaceStatement: 'interface' namespacedId ('extends' namespacedId (',' namespacedId)*) '{' (defineStatement | functionStatement)* '}';

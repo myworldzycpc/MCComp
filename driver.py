@@ -2,10 +2,10 @@ import sys
 from antlr4 import *
 from gen.MCCDPLexer import MCCDPLexer
 from gen.MCCDPParser import MCCDPParser
-from ListenerInterp import ListenerInterp
+from listener_interp import ListenerInterp
 
 def main(argv):
-    input_stream = FileStream("test/test.mccdp")
+    input_stream = FileStream("test/test2.mccdp")
     lexer = MCCDPLexer(input_stream)
     stream = CommonTokenStream(lexer)
     parser = MCCDPParser(stream)
