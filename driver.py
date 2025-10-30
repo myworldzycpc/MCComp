@@ -17,5 +17,24 @@ def main(argv):
         walker = ParseTreeWalker()
         walker.walk(listener_interp, tree)
 
+def shell():
+    while True:
+        try:
+            text = input('mccdp > ')
+            input_stream = InputStream(text)
+            lexer = MCCDPLexer(input_stream)
+            stream = CommonTokenStream(lexer)
+            parser = MCCDPParser(stream)
+            tree = parser.start_()
+            if parser.getNumberOfSyntaxErrors() > 0:
+                print("syntax errors")
+            else:
+                listener_interp = ListenerInterp()
+                walker = ParseTreeWalker()
+                walker.walk(listener_interp, tree)
+        except EOFError:
+            break
+
 if __name__ == '__main__':
     main(sys.argv)
+    # shell()

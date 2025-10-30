@@ -6,10 +6,10 @@ expr
     : '(' expr ')'                                        # ParenExpr
     | selector                                            # SelectorExpr
     | atom                                                # AtomExpr
-    | expr '.' ID                                         # MemberExpr
-    | expr '[' expr ']'                                   # IndexExpr
+    | expr member                                         # MemberExpr
+    | expr index                                          # IndexExpr
     | lval                                                # LvalExpr
-    | expr '(' exprList? ')'                              # CallExpr
+    | expr '(' argList? ')'                               # CallExpr
     | 'await' expr '(' exprList? ')'                      # AwaitExpr
     | lval ('++' | '--')                                  # PostIncDecExpr
     | ('++' | '--') lval                                  # PreIncDecExpr
@@ -24,27 +24,36 @@ expr
     ;
 
 exprList: expr (',' expr)*;
+argList: arg (',' arg)*;
+arg: (ID ':')? expr;
 
-atom: literal | '[' exprList? ']' | '{' pairList? '}';
+atom: literal | '[' ('I' | 'B' | 'L') ';' exprList? ']' | '[' exprList? ']' | '{' pairList? '}';
 pair: (ID | STRING) ':' expr;
 pairList: pair (',' pair)*;
-literal: int | real | range | STRING | CHAR | BOOL | NULL;
+literal: int | real | range | STRING | char | BOOL | NULL;
 
-lval
-    : namespacedId ('[' expr ']' | '.' ID)*
-    ;
+lval: namespacedId (member | index)*;
+member: '.' ID;
+index: '[' expr ']';
 
-// 词法规则
-real: REAL_VALUE REAL_TYPE?;
-REAL_VALUE: [+-]?([0-9]* '.' [0-9]+ | [0-9]+ '.' [0-9]*)([eE] [+-]?[0-9]+)?;
-REAL_TYPE: [FfDd];
-int: (INT_DEC | INT_HEX) INT_TYPE?;
-INT_DEC: [+-]?[0-9]+;
-INT_TYPE: [BbSsIiLlFfDd];
+DOT_DOT: '..';
+sign: '+' | '-';
+signedNumber: signedReal | signedInt;
+
+range: signedNumber? DOT_DOT signedNumber?;
+
+int: (INT_DEC | INT_HEX) typeProfix?;
+typeProfix: ID;
+signedInt: sign? int;
+INT_DEC: [0-9]+;
 INT_HEX: '0x' [0-9a-fA-F]+;
-range: (int | real)? '..' (int | real)?;
+
+real: realValue typeProfix?;
+signedReal: sign? real;
+realValue: (INT_DEC* '.' INT_DEC+ | INT_DEC+ '.' INT_DEC*)(('E' | 'e') sign?INT_DEC)?;
+
 STRING: '"' (~["\\] | '\\' .)* '"' | '\'' (~['\\] | '\\' .) '\'';
-CHAR: [Cc]STRING;
+char: ('C' | 'c')STRING;
 BOOL: 'true' | 'false';
 NULL: 'null';
 
@@ -76,8 +85,8 @@ defineStatement
     | 'score' scalingFactor? namespacedId ('=' expr)?       # ScoreStmt
     ;
 
-scalingFactor: '<' (int | real) '>';
-functionStatement: decorator? 'async'? 'function' namespacedId '(' params? ')' typeDecl? statement?;
+scalingFactor: '<' expr '>';
+functionStatement: decorator? 'async'? 'function' namespacedId '(' params? ')' typeDecl? block;
 classStatement: decorator? 'class' namespacedId ('extends' namespacedId)? ('implements' namespacedId (',' namespacedId)*)? ('{' (defineStatement | classStatement | functionStatement)* '}')?;
 interfaceStatement: 'interface' namespacedId ('extends' namespacedId (',' namespacedId)*) '{' (defineStatement | functionStatement)* '}';
 
@@ -86,7 +95,7 @@ param: ID (':' type) ('=' expr)?;
 type: ID;
 
 decorator: '@' namespacedIdSingleColon ('(' exprList? ')')?;
-selector: ('@a' | '@e' | '@s' | '@r' | '@p') ('[' (ID '=' expr)* ']')?;
+selector: ('@a' | '@e' | '@s' | '@r' | '@p') ('[' argList? ']')?;
 case: 'case' expr ':' statement*;
 default: 'default' ':' statement*;
 typeDecl: ':' type;
