@@ -1,3 +1,5 @@
+from abc import ABC
+
 from settings import INTERNAL_PATH, ENTRANCE_FUNCTION
 
 
@@ -60,17 +62,16 @@ class StorageDataPath(DataPath):
 
 
 class Constant:
-    def __init__(self):
-        pass
+    def __init__(self, value):
+        self.value = value
 
     def parsed_value(self):
-        return ""
+        return str(self.value)
 
 
 class IntConstant(Constant):
     def __init__(self, value: int, int_type: str = ""):
-        super().__init__()
-        self.value = value
+        super().__init__(value)
         self.type = int_type.lower() or "i"
         if self.type not in ["b", "s", "i", "l", "f", "d"]:
             raise ValueError(f"Invalid type {self.type} for IntConstant")
@@ -84,8 +85,7 @@ class IntConstant(Constant):
 
 class FloatConstant(Constant):
     def __init__(self, value: float, float_type: str = ""):
-        super().__init__()
-        self.value = value
+        super().__init__(value)
         self.type = float_type.lower() or "d"
         if self.type not in ["f", "d"]:
             raise ValueError(f"Invalid type {self.type} for FloatConstant")
@@ -97,10 +97,20 @@ class FloatConstant(Constant):
         return str(self.value)
 
 
+class BooleanConstant(IntConstant):
+    def __init__(self, value: bool):
+        super().__init__(1 if value else 0, "b")
+
+    def bool_value(self):
+        return self.value != 0
+
+    def __str__(self):
+        return f"{'true' if self.value else 'false'}"
+
+
 class StringConstant(Constant):
     def __init__(self, value: str):
-        super().__init__()
-        self.value = value
+        super().__init__(value)
 
     def __str__(self):
         return f"\"{self.value}\""
@@ -111,6 +121,8 @@ class StringConstant(Constant):
 
 class Range:
     def __init__(self, start: int | float | None = None, end: int | float | None = None):
+        if start is not None and end is not None and start > end:
+            raise ValueError("Start value cannot be greater than end value")
         self.start = start
         self.end = end
 
@@ -151,7 +163,9 @@ class Function:
         self.params = params
 
     @classmethod
-    def from_whole_path(cls, namespace, whole_path: list[str], params: list["FunctionArgument"]):
+    def from_whole_path(cls, namespace, whole_path: list[str], params: list["FunctionArgument"] = None):
+        if params is None:
+            params = []
         if len(whole_path) == 0:
             return Function(namespace, ENTRANCE_FUNCTION, params, [])
         elif len(whole_path) == 1:
@@ -210,7 +224,7 @@ class SelectorArgument:
         return f"SelectorArgument(name='{self.name}', value='{self.value}')"
 
 
-class RelationalOperation:
+class RelationalOperation(ABC):
     pass
 
 
@@ -220,7 +234,13 @@ class ScoreCompare(RelationalOperation):
         self.score2 = score2
         self.operation = operation
 
+
 class ScoreMatch(RelationalOperation):
     def __init__(self, score: Scoreboard, range1: Range):
         self.score = score
         self.range = range1
+
+
+class NotLogic:
+    def __init__(self, operation):
+        self.operation = operation

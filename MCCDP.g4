@@ -11,8 +11,8 @@ expr
     | lval                                                # LvalExpr
     | expr '(' argList? ')'                               # CallExpr
     | 'await' expr '(' exprList? ')'                      # AwaitExpr
-    | lval ('++' | '--')                                  # PostIncDecExpr
-    | ('++' | '--') lval                                  # PreIncDecExpr
+    | expr ('++' | '--')                                  # PostIncDecExpr
+    | ('++' | '--') expr                                  # PreIncDecExpr
     | ('+' | '-' | '!' | '~') expr                        # UnaryExpr
     | expr ('*' | '/' | '%') expr                         # MultiplicativeExpr
     | expr ('+' | '-') expr                               # AdditiveExpr
@@ -20,7 +20,7 @@ expr
     | expr ('==' | '!=' | '<' | '>' | '<=' | '>=') expr   # CompareExpr
     | expr ('||' | '&&') expr                             # LogicalExpr
     | expr '?' expr ':' expr                              # TernaryExpr
-    | lval ('=' | '+=' | '-=' | '*=' | '/=' | '%=') expr  # AssignExpr
+    | expr ('=' | '+=' | '-=' | '*=' | '/=' | '%=') expr  # AssignExpr
     ;
 
 exprList: expr (',' expr)*;
@@ -32,7 +32,7 @@ pair: (ID | STRING) ':' expr;
 pairList: pair (',' pair)*;
 literal: int | real | range | STRING | char | BOOL | NULL;
 
-lval: namespacedId (member | index)*;
+lval: namespacedId;
 member: '.' ID;
 index: '[' expr ']';
 

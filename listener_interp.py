@@ -34,12 +34,7 @@ class ListenerInterp(MCCDPListener):
         return Intermediate(intermediate)
 
     def add_command(self, command, mode=None):
-        if len(self.scope) == 0:
-            key = ".init"
-        elif len(self.scope) == 1:
-            key = self.scope[0]
-        else:
-            key = ".internal/" + ".".join(self.scope)
+        key = str(Function.from_whole_path(self.namespace, self.scope))
         if mode == "prepend":
             self.commands[key].insert(0, command)
         else:
@@ -99,16 +94,15 @@ class ListenerInterp(MCCDPListener):
 
     def enter_scope(self, name=None):
         if name is None:
-            number = self.scope_counters[tuple(self.scope)] + 1
+            number = self.scope_counters[tuple(self.scope)]
             self.scope_counters[tuple(self.scope)] += 1
             self.scope.append(str(number))
         else:
-            number = self.scope_counters[tuple(self.scope + [name])] + 1
+            number = self.scope_counters[tuple(self.scope + [name])]
             self.scope_counters[tuple(self.scope + [name])] += 1
             self.scope += [name, str(number)]
 
     def leave_scope(self):
-        # todo: 最后一位是数字，则检查前一位，如果是某些值则接着跳出
         last = self.scope.pop()
         if last.isdigit() and len(self.scope) > 0:
             if not self.scope[-1].isdigit():
@@ -116,6 +110,7 @@ class ListenerInterp(MCCDPListener):
                     self.scope.pop()
 
     def enterEveryRule(self, ctx):
+        # return
         if isinstance(ctx, MCCDPParser.StatementContext):
             self.add_command("# " + re.sub(r"\s+", " ", ctx.getText()))
 
@@ -154,17 +149,21 @@ class ListenerInterp(MCCDPListener):
         self.result[ctx] = self.result[ctx.atom()]
 
     def exitLval(self, ctx: MCCDPParser.LvalContext):
-        if ctx.getChildCount() > 1:
-            raise NotImplementedError("Complex lvals not supported")  # TODO
-        else:
-            namespaced_id = self.analyse_namespaced_id(ctx.namespacedId())
-            definition_key = (*self.scope, str(namespaced_id))
+        namespaced_id = self.analyse_namespaced_id(ctx.namespacedId())
+        current_scope = self.scope.copy()
+        if namespaced_id.id in BUILT_IN_FUNCTIONS:
+            self.result[ctx] = BUILT_IN_FUNCTIONS[namespaced_id.id]
+            return
+        while True:
+            definition_key = (*current_scope, str(namespaced_id))
             if definition_key in self.definitions:
                 self.result[ctx] = self.definitions[definition_key]
-            elif namespaced_id.id in BUILT_IN_FUNCTIONS:
-                self.result[ctx] = BUILT_IN_FUNCTIONS[namespaced_id.id]
+                return
+            if len(current_scope) == 0:
+                break
             else:
-                raise ValueError(f"Undefined variable {namespaced_id.id}")
+                current_scope.pop()
+        raise ValueError(f"Undefined variable {namespaced_id.id}")
 
     def exitLvalExpr(self, ctx: MCCDPParser.LvalExprContext):
         self.result[ctx] = self.result[ctx.lval()]
@@ -259,6 +258,9 @@ class ListenerInterp(MCCDPListener):
         self.result[ctx] = Function(self.namespace, self.scope[-1], [], self.scope[:-1])
         self.leave_scope()
 
+    def exitBlockStmt(self, ctx: MCCDPParser.BlockStmtContext):
+        self.result[ctx] = self.result[ctx.block()]
+
     def exitCallExpr(self, ctx: MCCDPParser.CallExprContext):
         to_call_ctx: MCCDPParser.ExprContext = ctx.expr()
         to_call = self.result[to_call_ctx]
@@ -293,8 +295,17 @@ class ListenerInterp(MCCDPListener):
     def exitSelector(self, ctx: MCCDPParser.SelectorContext):
         variant = ctx.getChild(0).getText()[1:]
         args_ctx: MCCDPParser.ArgListContext = ctx.argList()
-        args = {}
-        # todo
+        args: list[SelectorArgument] = []
+        if args_ctx is not None:
+            for i, arg_ctx in enumerate(args_ctx.children):
+                if arg_ctx.ID() is not None:
+                    args.append(SelectorArgument(arg_ctx.ID().getText(), self.result[arg_ctx.expr()]))
+                else:
+                    args.append(SelectorArgument(i, self.result[arg_ctx.expr()]))
+        self.result[ctx] = Selector(variant, args)
+
+    def exitSelectorExpr(self, ctx: MCCDPParser.SelectorExprContext):
+        self.result[ctx] = self.result[ctx.selector()]
 
     def exitCompareExpr(self, ctx: MCCDPParser.CompareExprContext):
         expr1_ctx: MCCDPParser.ExprContext = ctx.expr(0)
@@ -304,11 +315,50 @@ class ListenerInterp(MCCDPListener):
         result2 = self.result[expr2_ctx]
         if isinstance(result1, Scoreboard) and isinstance(result2, Scoreboard):
             self.result[ctx] = ScoreCompare(result1, result2, op)
+        elif isinstance(result1, IntConstant) and isinstance(result2, IntConstant):
+            if op == "==":
+                self.result[ctx] = BooleanConstant(result1.value == result2.value)
+            elif op == "!=":
+                self.result[ctx] = BooleanConstant(result1.value != result2.value)
+            elif op == ">":
+                self.result[ctx] = BooleanConstant(result1.value > result2.value)
+            elif op == ">=":
+                self.result[ctx] = BooleanConstant(result1.value >= result2.value)
+            elif op == "<":
+                self.result[ctx] = BooleanConstant(result1.value < result2.value)
+            elif op == "<=":
+                self.result[ctx] = BooleanConstant(result1.value <= result2.value)
+        elif isinstance(result1, Scoreboard) and isinstance(result2, IntConstant):
+            if op == "==":
+                self.result[ctx] = ScoreMatch(result1, Range(result2.value, result2.value))
+            elif op == "!=":
+                self.result[ctx] = NotLogic(ScoreMatch(result1, Range(result2.value, result2.value)))
+            elif op == ">":
+                self.result[ctx] = ScoreMatch(result1, Range(result2.value + 1, None))
+            elif op == ">=":
+                self.result[ctx] = ScoreMatch(result1, Range(result2.value, None))
+            elif op == "<":
+                self.result[ctx] = ScoreMatch(result1, Range(None, result2.value - 1))
+            elif op == "<=":
+                self.result[ctx] = ScoreMatch(result1, Range(None, result2.value))
+        elif isinstance(result1, Scoreboard) and isinstance(result2, Range):
+            if op == "==":
+                self.result[ctx] = ScoreMatch(result1, result2)
+            elif op == "!=":
+                self.result[ctx] = NotLogic(ScoreMatch(result1, result2))
+            elif op == ">":
+                self.result[ctx] = ScoreMatch(result1, Range(result2.end + 1, None))
+            elif op == ">=":
+                self.result[ctx] = ScoreMatch(result1, Range(result2.start, None))
+            elif op == "<":
+                self.result[ctx] = ScoreMatch(result1, Range(None, result2.start - 1))
+            elif op == "<=":
+                self.result[ctx] = ScoreMatch(result1, Range(None, result2.end))
         else:
-            raise NotImplementedError("Comparison between non-scoreboard values not supported")  # TODO
+            raise NotImplementedError(f"Comparison values between {type(result1)} and {type(result2)} are not supported")  # TODO
 
     def enterIfStmt(self, ctx: MCCDPParser.IfStmtContext):
-        if isinstance(ctx.statement(), MCCDPParser.BlockStmtContext):
+        if isinstance(ctx.statement(0), MCCDPParser.BlockStmtContext):
             self.scope_ready = "if"
         else:
             self.enter_scope("if")
@@ -316,19 +366,68 @@ class ListenerInterp(MCCDPListener):
     def exitIfStmt(self, ctx: MCCDPParser.IfStmtContext):
         condition_ctx: MCCDPParser.ExprContext = ctx.expr()
         condition = self.result[condition_ctx]
-        statement_ctx: MCCDPParser.StatementContext = ctx.statement()
-        statement = self.result[statement_ctx]
-        scope = self.scope.copy()
+        statement_ctx: MCCDPParser.StatementContext = ctx.statement(0)
         if not isinstance(statement_ctx, MCCDPParser.BlockStmtContext):
+            scope = self.scope.copy()
             self.leave_scope()
-        if len(self.commands.get(tuple(scope))) == 0:
-            del self.commands[tuple(scope)]
-        elif len(self.commands.get(tuple(scope))) == 1:
-            command = self.commands[tuple(scope)][0]
+            key = str(Function.from_whole_path(self.namespace, scope))
+            if len(self.commands[key]) == 0:
+                del self.commands[key]
+                return
+            elif len(self.commands[key]) == 1:
+                command = self.commands[key][0]
+                del self.commands[key]
+            else:
+                function = Function.from_whole_path(self.namespace, scope, [])
+                command = FunctionCommandGenerator(function)
         else:
-            function = Function.from_whole_path()  # todo
+            statement = self.result[statement_ctx]
+            function = statement
+            command = FunctionCommandGenerator(function)
         if isinstance(condition, ScoreCompare):
-            self.add_command(ExecuteRunCommandGenerator([ExecuteIfScoreCompareCommandGenerator(condition.score1, condition.score2, condition.operation)], ))
+            self.add_command(ExecuteRunCommandGenerator([ExecuteIfScoreCompareCommandGenerator(condition.score1, condition.score2, condition.operation)], command))
+        elif isinstance(condition, BooleanConstant):
+            if condition.value:
+                self.add_command(command)
+        elif isinstance(condition, ScoreMatch):
+            self.add_command(ExecuteRunCommandGenerator([ExecuteIfScoreMatchCommandGenerator(condition.score, condition.range)], command))
+        else:
+            raise NotImplementedError(f"Condition of type {type(condition)} is not supported")
+
+    def exitPostIncDecExpr(self, ctx: MCCDPParser.PostIncDecExprContext):
+        expr_ctx: MCCDPParser.LvalContext = ctx.expr()
+        lval = self.result[expr_ctx]
+        if isinstance(lval, Scoreboard):
+            intermediate_scoreboard = self.intermediate_scoreboard(self.create_intermediate(), lval.scale)
+            self.op_scoreboard(intermediate_scoreboard, lval, "=")
+            self.result[ctx] = intermediate_scoreboard
+            if ctx.getChild(1).getText() == "++":
+                self.add_scoreboard(lval, 1)
+            elif ctx.getChild(1).getText() == "--":
+                self.remove_scoreboard(lval, 1)
+
+    def exitPreIncDecExpr(self, ctx: MCCDPParser.PreIncDecExprContext):
+        expr_ctx: MCCDPParser.LvalContext = ctx.expr()
+        lval = self.result[expr_ctx]
+        if isinstance(lval, Scoreboard):
+            if ctx.getChild(0).getText() == "++":
+                self.add_scoreboard(lval, 1)
+            elif ctx.getChild(0).getText() == "--":
+                self.remove_scoreboard(lval, 1)
+            self.result[ctx] = lval
+
+    def exitAssignExpr(self, ctx:MCCDPParser.AssignExprContext):
+        lval_ctx: MCCDPParser.LvalContext = ctx.expr(0)
+        lval = self.result[lval_ctx]
+        expr_ctx: MCCDPParser.ExprContext = ctx.expr(1)
+        expr = self.result[expr_ctx]
+        if isinstance(lval, Scoreboard):
+            if isinstance(expr, IntConstant):
+                self.set_scoreboard(lval, expr.value)
+            elif isinstance(expr, Scoreboard):
+                self.op_scoreboard(lval, expr, "=")
+            else:
+                raise NotImplementedError(f"Assigning {type(expr)} to scoreboard is not supported.")
 
     def exitStart_(self, ctx: MCCDPParser.Start_Context):
         print()

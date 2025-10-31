@@ -168,12 +168,14 @@ class ExecuteAtCommandGenerator(ExecuteSubCommandGenerator):
     def get_params(self) -> list[str]:
         return super().get_params() + ["at", str(self.target)]
 
+
 class ExecuteIfCommandGenerator(ExecuteSubCommandGenerator):
     def __init__(self):
         super().__init__()
 
     def get_params(self) -> list[str]:
         return super().get_params() + ["if"]
+
 
 class ExecuteIfScoreCommandGenerator(ExecuteIfCommandGenerator):
     def __init__(self, scoreboard: Scoreboard):
@@ -182,6 +184,7 @@ class ExecuteIfScoreCommandGenerator(ExecuteIfCommandGenerator):
 
     def get_params(self) -> list[str]:
         return super().get_params() + ["score", self.scoreboard.final_name(), self.scoreboard.final_objective()]
+
 
 class ExecuteIfScoreCompareCommandGenerator(ExecuteIfScoreCommandGenerator):
     def __init__(self, scoreboard1: Scoreboard, scoreboard2: Scoreboard, operation: str):
@@ -192,6 +195,14 @@ class ExecuteIfScoreCompareCommandGenerator(ExecuteIfScoreCommandGenerator):
     def get_params(self) -> list[str]:
         return super().get_params() + [self.operation, self.scoreboard2.final_name(), self.scoreboard2.final_objective()]
 
+
+class ExecuteIfScoreMatchCommandGenerator(ExecuteIfScoreCommandGenerator):
+    def __init__(self, scoreboard1: Scoreboard, range1: Range):
+        super().__init__(scoreboard1)
+        self.range = range1
+
+    def get_params(self) -> list[str]:
+        return super().get_params() + ["matches", str(self.range)]
 
 
 class ExecuteRunCommandGenerator(ExecuteCommandGenerator):
