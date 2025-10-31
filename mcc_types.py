@@ -1,6 +1,11 @@
-from abc import ABC
+from abc import ABC, abstractmethod
+from typing import Any
 
 from settings import INTERNAL_PATH, ENTRANCE_FUNCTION
+
+
+class VariableType(ABC):
+    pass
 
 
 class Intermediate:
@@ -16,7 +21,7 @@ class Field:
         self.immutable = immutable
 
 
-class Scoreboard(Field):
+class Scoreboard(Field, VariableType):
     def __init__(self, namespace, objective, scope, name, scale: int | float = 1.0, immutable=False):
         super().__init__(immutable)
         self.namespace = namespace
@@ -38,7 +43,7 @@ class Scoreboard(Field):
         return f"Scoreboard(namespace='{self.namespace}', objective='{self.objective}', scope={self.scope}, name='{self.name}', scale={self.scale})"
 
 
-class DataPath(Field):
+class DataPath(Field, VariableType):
     def __init__(self, immutable=False):
         super().__init__(immutable)
 
@@ -154,16 +159,17 @@ class NamespacedID:
 
 
 class Function:
-    def __init__(self, namespace, name, params: list["FunctionArgument"], scope=None):
+    def __init__(self, namespace, name, params: list["FunctionArgument"], scope=None, executor: "Selector" = None):
         if scope is None:
             scope = []
         self.namespace = namespace
         self.name = name
         self.scope = scope
         self.params = params
+        self.executor = executor
 
     @classmethod
-    def from_whole_path(cls, namespace, whole_path: list[str], params: list["FunctionArgument"] = None):
+    def from_whole_path(cls, namespace, whole_path: list[str], params: list["FunctionArgument"] = None, executor: "Selector" = None):
         if params is None:
             params = []
         if len(whole_path) == 0:
@@ -206,7 +212,7 @@ class Selector:
         self.args = args
 
     def __str__(self):
-        return f"@{self.variant}[{', '.join(str(arg) for arg in self.args)}]"
+        return f"@{self.variant}{f"[{', '.join(str(arg) for arg in self.args)}]" if self.args else ''}"
 
     def __repr__(self):
         return f"Selector(variant='{self.variant}', args={self.args})"
@@ -224,7 +230,30 @@ class SelectorArgument:
         return f"SelectorArgument(name='{self.name}', value='{self.value}')"
 
 
-class RelationalOperation(ABC):
+class Command:
+    def __init__(self, args: list[Any]):
+        self.args = args
+
+    def __str__(self):
+        return " ".join(str(arg) for arg in self.args)
+
+    def __repr__(self):
+        return f"Command(args={self.args})"
+
+
+class ConcreteOperation(ABC):
+    def __init__(self, executor: "Selector" = None):
+        self.executor = executor
+
+    @abstractmethod
+    def to_commands(self) -> list[Command]: ...
+
+
+class AbstractionOperation(ABC):
+    pass
+
+
+class RelationalOperation(AbstractionOperation, ABC):
     pass
 
 
@@ -241,6 +270,31 @@ class ScoreMatch(RelationalOperation):
         self.range = range1
 
 
-class NotLogic:
+class Wrapper:
+    def __int__(self, wrapped_obj):
+        self.wrapped_obj = wrapped_obj
+
+    def get(self):
+        return self.wrapped_obj
+
+
+class NotLogic(Wrapper):
     def __init__(self, operation):
-        self.operation = operation
+        super().__init__(operation)
+
+
+class ExecutorModifier(ABC):
+    pass
+
+
+class ExecuteAsModifier(ExecutorModifier):
+    def __init__(self, selector: Selector):
+        self.selector = selector
+
+class ExecuteAtModifier(ExecutorModifier):
+    def __init__(self, selector: Selector):
+        self.selector = selector
+
+class ExecutorModifiers:
+    def __init__(self, executor_modifiers: list[ExecutorModifier]):
+        self.executor_modifiers = executor_modifiers

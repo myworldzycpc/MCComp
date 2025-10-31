@@ -28,6 +28,21 @@ class ScoreboardObjectivesCommandGenerator(ScoreboardCommandGenerator):
         return super().get_params() + ["objectives"]
 
 
+class ScoreboardObjectivesAddCommandGenerator(ScoreboardObjectivesCommandGenerator):
+    def __init__(self, namespace: str, objective: str, criteria: str, display_name=None):
+        super().__init__()
+        self.namespace = namespace
+        self.objective = objective
+        self.criteria = criteria
+        self.display_name = display_name
+
+    def get_params(self) -> list[str]:
+        params = super().get_params() + ["add", f"{self.namespace}.{self.objective}", self.criteria]
+        if self.display_name is not None:
+            params.append(str(self.display_name))
+        return params
+
+
 class ScoreboardPlayersCommandGenerator(ScoreboardCommandGenerator):
     def __init__(self):
         super().__init__()

@@ -1,5 +1,9 @@
+import json
+import os
 from collections import defaultdict
 from typing import Any
+
+from antlr4 import ParserRuleContext
 
 from built_in_functions import BUILT_IN_FUNCTIONS
 from gen.MCCDPParser import MCCDPParser
@@ -11,10 +15,14 @@ from command_gen import *
 
 import re
 
+from settings import OUTPUT_PATH
+
 
 class ListenerInterp(MCCDPListener):
-    def __init__(self):
-        self.result = {}
+    def __init__(self, mode: str = 'file'):
+        self.mode = mode
+        self.result: dict[ParserRuleContext, Any] = {}
+        self.affiliations = set()
         self.intermediate = {}
         self.commands = defaultdict(list)
         self.definitions = {}
@@ -88,9 +96,14 @@ class ListenerInterp(MCCDPListener):
                 if isinstance(message, Constant):
                     message_str = message.parsed_value()
                     self.add_command(SayCommandGenerator(message_str))
+            elif function.name == "at":
+                return ExecuteAtModifier(args["selector"])
+            else:
+                raise NotImplementedError(f"Unsupported built-in function {function.name}")
         else:
             if not args:
                 self.add_command(FunctionCommandGenerator(function))
+        return None
 
     def enter_scope(self, name=None):
         if name is None:
@@ -106,8 +119,22 @@ class ListenerInterp(MCCDPListener):
         last = self.scope.pop()
         if last.isdigit() and len(self.scope) > 0:
             if not self.scope[-1].isdigit():
-                if self.scope[-1] in ["if", "for", "while"]:
+                if self.scope[-1] in ["if", "for", "while", "withf"]:
                     self.scope.pop()
+
+    def get_lval(self, namespaced_id: NamespacedID, current_scope: list[str]):
+        current_scope = current_scope.copy()
+        if namespaced_id.id in BUILT_IN_FUNCTIONS:
+            return BUILT_IN_FUNCTIONS[namespaced_id.id]
+        while True:
+            definition_key = (*current_scope, str(namespaced_id))
+            if definition_key in self.definitions:
+                return self.definitions[definition_key]
+            if len(current_scope) == 0:
+                break
+            else:
+                current_scope.pop()
+        raise ValueError(f"Undefined variable {namespaced_id.id}")
 
     def enterEveryRule(self, ctx):
         # return
@@ -149,21 +176,7 @@ class ListenerInterp(MCCDPListener):
         self.result[ctx] = self.result[ctx.atom()]
 
     def exitLval(self, ctx: MCCDPParser.LvalContext):
-        namespaced_id = self.analyse_namespaced_id(ctx.namespacedId())
-        current_scope = self.scope.copy()
-        if namespaced_id.id in BUILT_IN_FUNCTIONS:
-            self.result[ctx] = BUILT_IN_FUNCTIONS[namespaced_id.id]
-            return
-        while True:
-            definition_key = (*current_scope, str(namespaced_id))
-            if definition_key in self.definitions:
-                self.result[ctx] = self.definitions[definition_key]
-                return
-            if len(current_scope) == 0:
-                break
-            else:
-                current_scope.pop()
-        raise ValueError(f"Undefined variable {namespaced_id.id}")
+        self.result[ctx] = self.get_lval(self.analyse_namespaced_id(ctx.namespacedId()), current_scope=self.scope)
 
     def exitLvalExpr(self, ctx: MCCDPParser.LvalExprContext):
         self.result[ctx] = self.result[ctx.lval()]
@@ -234,13 +247,16 @@ class ListenerInterp(MCCDPListener):
         else:
             return NamespacedID(ctx.getChild(0).getText(), ctx.getChild(2).getText())
 
+    def mark_affiliated(self, ctx: MCCDPParser.BlockStmtContext):
+        self.affiliations.add(ctx)
+
     def enterFunctionStatement(self, ctx: MCCDPParser.FunctionStatementContext):
         name_ctx: MCCDPParser.NamespacedIdContext = ctx.namespacedId()
         name = self.analyse_namespaced_id(name_ctx)
         decorator_ctx: MCCDPParser.DecoratorContext = ctx.decorator()
         if decorator_ctx is not None:
             function_tag = self.analyse_namespaced_id(decorator_ctx.namespacedIdSingleColon())
-            self.function_tags[str(function_tag)].append((self.scope, name))
+            self.function_tags[str(function_tag)].append(Function(name.namespace, name.id, [], self.scope))
         self.scope_ready = name.id
         self.definitions[(*self.scope, str(name))] = Function(name.namespace, name.id, [], self.scope)
 
@@ -251,12 +267,13 @@ class ListenerInterp(MCCDPListener):
             else:
                 self.enter_scope(self.scope_ready)
             self.scope_ready = None
-        else:
+        elif ctx not in self.affiliations:
             self.enter_scope()
 
     def exitBlock(self, ctx: MCCDPParser.BlockContext):
         self.result[ctx] = Function(self.namespace, self.scope[-1], [], self.scope[:-1])
-        self.leave_scope()
+        if ctx not in self.affiliations:
+            self.leave_scope()
 
     def exitBlockStmt(self, ctx: MCCDPParser.BlockStmtContext):
         self.result[ctx] = self.result[ctx.block()]
@@ -274,7 +291,7 @@ class ListenerInterp(MCCDPListener):
                     args[arg_ctx.ID().getText()] = self.result[arg_ctx.expr()]
                 else:
                     args[i] = self.result[arg_ctx.expr()]
-
+        executor = None
         if isinstance(to_call, Function):
             for i, param in enumerate(to_call.params):
                 if args.get(param.name) is not None:
@@ -290,7 +307,7 @@ class ListenerInterp(MCCDPListener):
                 else:
                     final_args[param.name] = None
 
-            self.call_function(to_call, final_args)
+            self.result[ctx] = self.call_function(to_call, final_args)
 
     def exitSelector(self, ctx: MCCDPParser.SelectorContext):
         variant = ctx.getChild(0).getText()[1:]
@@ -416,7 +433,7 @@ class ListenerInterp(MCCDPListener):
                 self.remove_scoreboard(lval, 1)
             self.result[ctx] = lval
 
-    def exitAssignExpr(self, ctx:MCCDPParser.AssignExprContext):
+    def exitAssignExpr(self, ctx: MCCDPParser.AssignExprContext):
         lval_ctx: MCCDPParser.LvalContext = ctx.expr(0)
         lval = self.result[lval_ctx]
         expr_ctx: MCCDPParser.ExprContext = ctx.expr(1)
@@ -429,7 +446,41 @@ class ListenerInterp(MCCDPListener):
             else:
                 raise NotImplementedError(f"Assigning {type(expr)} to scoreboard is not supported.")
 
+    def exitMemberExpr(self, ctx: MCCDPParser.MemberExprContext):
+        pass
+
+    def enterWithStmt(self, ctx: MCCDPParser.WithStmtContext):
+        statement_ctx: MCCDPParser.StatementContext = ctx.statement()
+        if isinstance(statement_ctx, MCCDPParser.BlockStmtContext):
+            self.mark_affiliated(statement_ctx.block())
+        self.enter_scope("with")
+
+    def exitWithStmt(self, ctx: MCCDPParser.WithStmtContext):
+        function = Function.from_whole_path(self.namespace, self.scope, [])
+        self.leave_scope()
+        commands = self.commands[str(function)]
+        if len(commands) == 0:
+            del self.commands[str(function)]
+            return
+        elif len(commands) == 1:
+            command = commands[0]
+            del self.commands[str(function)]
+        else:
+            command = FunctionCommandGenerator(function)
+        expr_ctx = ctx.expr()
+        expr = self.result[expr_ctx]
+        if isinstance(expr, Selector):
+            self.add_command(ExecuteRunCommandGenerator([ExecuteAsCommandGenerator(expr)], command))
+        elif isinstance(expr, ExecuteAtModifier):
+            self.add_command(ExecuteRunCommandGenerator([ExecuteAtCommandGenerator(expr.selector)], command))
+
     def exitStart_(self, ctx: MCCDPParser.Start_Context):
+        # 后处理
+        entrance_function = Function(self.namespace, ENTRANCE_FUNCTION, [], [])
+        self.function_tags["minecraft:load"].insert(0, entrance_function)
+        self.commands[str(entrance_function)].insert(0, ScoreboardObjectivesAddCommandGenerator(self.namespace, "__global", "dummy", f'"{self.namespace} globals"'))
+
+        # 输出结果
         print()
         print("-----------")
         print("[DEFINITIONS]")
@@ -442,18 +493,32 @@ class ListenerInterp(MCCDPListener):
         print()
         print("[FUNCTION TAGS]")
         for k, v in self.function_tags.items():
+            tag_namespace, tag_name = k.split(":", 1)
+            tag_path = OUTPUT_PATH + f"data/{tag_namespace}/tags/function/"
             print(f"{k}")
-            for scope, name in v:
-                print(f"- {'.'.join(i.id for i in scope + [name])}")
+            os.makedirs(tag_path, exist_ok=True)
+            data = {"values": []}
+            for function in v:
+                list_item_str = str(function)
+                print(f"- {list_item_str}")
+                data["values"].append(list_item_str)
+            with open(f"{tag_path}{tag_name}.json", "w") as f:
+                json.dump(data, f, indent=4)
             print()
         print()
         print("[COMMANDS]")
         for k, v in self.commands.items():
-            print(k)
-            print("-----------")
-            for i in v:
-                print(i)
-            print()
+            namespace, path_str = k.split(":", 1)
+            path = f"{OUTPUT_PATH}data/{namespace}/function/" + "".join(i + "/" for i in path_str.split("/")[:-1])
+            name = path_str.split("/")[-1] + ".mcfunction"
+            os.makedirs(path, exist_ok=True)
+            with open(path + name, "w") as f:
+                print(k)
+                print("-----------")
+                for i in v:
+                    f.write(str(i) + "\n")
+                    print(i)
+                print()
         # for i in range(0, ctx.getChildCount(), 2):
         #     print(self.result[ctx.getChild(i)])
         # print("-----------")
